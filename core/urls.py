@@ -19,6 +19,8 @@ urlpatterns = [
     
     path('address/autocomplete/', api_views.address_autocomplete_api, name='api_address_autocomplete'),
     path('distance/calculate/', api_views.calculate_distance_api, name='api_calculate_distance'),
+    path('drivers/nearby/', api_views.nearby_drivers_api, name='api_nearby_drivers'),
+    path('pricing/', api_views.pricing_api, name='api_pricing'),
     
     path('auth/send-otp/', api_views.send_otp_api, name='api_send_otp'),
     path('auth/verify-otp/', api_views.verify_otp_api, name='api_verify_otp'),
