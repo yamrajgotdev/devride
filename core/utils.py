@@ -17,6 +17,10 @@ ROUTING_ENDPOINT_CANDIDATES = [
     "https://api.olamaps.io/routing/v1/directions/basic",
 ]
 ROUTING_API_REACHABLE = None
+ROUTING_LAST_CHECK = 0
+ROUTING_RETRY_INTERVAL = 300  # retry OLA routing every 5 minutes after failure
+
+import time
 
 
 def get_ola_access_token():
@@ -346,8 +350,11 @@ def clean_address(address):
 
 
 def get_route(origin_lat, origin_lng, dest_lat, dest_lng):
-    global ROUTING_API_REACHABLE
-    if ROUTING_API_REACHABLE is False:
+    global ROUTING_API_REACHABLE, ROUTING_LAST_CHECK
+    now = time.time()
+
+    # If it previously failed, only retry after ROUTING_RETRY_INTERVAL seconds
+    if ROUTING_API_REACHABLE is False and (now - ROUTING_LAST_CHECK) < ROUTING_RETRY_INTERVAL:
         return None
 
     access_token = get_ola_access_token()
@@ -356,15 +363,15 @@ def get_route(origin_lat, origin_lng, dest_lat, dest_lng):
         if route:
             ROUTING_API_REACHABLE = True
             return route
-    
+
     route = get_route_with_api_key_fallback(origin_lat, origin_lng, dest_lat, dest_lng)
     if route:
         ROUTING_API_REACHABLE = True
         return route
 
-    # Avoid repeated external 404s on every distance call.
     ROUTING_API_REACHABLE = False
-    print("[OLA WARN] Routing API unavailable for configured credentials; using internal route fallback.")
+    ROUTING_LAST_CHECK = now
+    print("[OLA WARN] Routing API unavailable; using haversine fallback with road factor.")
     return None
 
 
@@ -457,26 +464,31 @@ def get_distance_matrix(origins, destinations):
         return None
 
 
-def calculate_fare(distance_km, vehicle_type="mini"):
+def calculate_fare(distance_km, vehicle_type="bike"):
     base_fare = {
+        "bike": 15,
+        "porter": 25,
+        # legacy support
         "mini": 20,
         "sedan": 30,
         "suv": 40,
         "auto": 15,
-        "bike": 10,
     }
     per_km_rate = {
+        "bike": 8,
+        "porter": 14,
+        # legacy support
         "mini": 10,
         "sedan": 14,
         "suv": 18,
         "auto": 8,
-        "bike": 6,
     }
-    
-    base = base_fare.get(vehicle_type, 20)
-    rate = per_km_rate.get(vehicle_type, 10)
-    
-    return base + (distance_km * rate)
+
+    vtype = vehicle_type.lower() if vehicle_type else "bike"
+    base = base_fare.get(vtype, 15)
+    rate = per_km_rate.get(vtype, 8)
+
+    return round(base + (distance_km * rate), 2)
 
 
 SMS_PROVIDER = "terminal"  # Options: "terminal", "msg91", "twilio", "fast2sms"
