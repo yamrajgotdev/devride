@@ -13,6 +13,7 @@ interface Driver {
   lat: number;
   lng: number;
   name?: string;
+  distance?: number;
 }
 
 interface MapContainerProps {
@@ -23,9 +24,10 @@ interface MapContainerProps {
   pickupName?: string;
   dropName?: string;
   onUserLocationChange?: (location: { lat: number; lng: number }) => void;
+  nearestDriver?: Driver | null;
 }
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_URL || "";
 
 const MapContainer: React.FC<MapContainerProps> = ({
   pickup,
@@ -35,12 +37,12 @@ const MapContainer: React.FC<MapContainerProps> = ({
   pickupName,
   dropName,
   onUserLocationChange,
+  nearestDriver,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const markersRef = useRef<Map<string, any>>(new Map());
   const driversRef = useRef<Map<number, any>>(new Map());
-  const routeLayerRef = useRef<boolean>(false);
   const [olaMapsInstance, setOlaMapsInstance] = useState<any>(null);
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [locationError, setLocationError] = useState<string | null>(null);
@@ -76,7 +78,6 @@ const MapContainer: React.FC<MapContainerProps> = ({
 
         if (cancelled) return;
 
-        // Wait for the map style to fully load before doing anything
         map.on("load", () => {
           if (cancelled) return;
           console.log("Ola Map loaded successfully");
@@ -123,7 +124,7 @@ const MapContainer: React.FC<MapContainerProps> = ({
     }
   }, [userLocation, olaMapsInstance, mapReady]);
 
-  // Pickup marker
+  // Pickup marker — RED (left side of map)
   useEffect(() => {
     if (!olaMapsInstance || !mapReady || !mapRef.current) return;
 
@@ -136,16 +137,14 @@ const MapContainer: React.FC<MapContainerProps> = ({
       existing.setLngLat([pickup.lng, pickup.lat]);
     } else {
       const marker = olaMapsInstance
-        .addMarker({ color: "#22c55e", draggable: false })
+        .addMarker({ color: "#ef4444", draggable: false })
         .setLngLat([pickup.lng, pickup.lat])
         .addTo(mapRef.current);
       markersRef.current.set("pickup", marker);
     }
-
-    mapRef.current.flyTo({ center: [pickup.lng, pickup.lat], zoom: 15 });
   }, [pickup, olaMapsInstance, mapReady]);
 
-  // Drop marker
+  // Drop marker — BLUE (right side of map)
   useEffect(() => {
     if (!olaMapsInstance || !mapReady || !mapRef.current) return;
 
@@ -158,59 +157,95 @@ const MapContainer: React.FC<MapContainerProps> = ({
       existing.setLngLat([drop.lng, drop.lat]);
     } else {
       const marker = olaMapsInstance
-        .addMarker({ color: "#ef4444", draggable: false })
+        .addMarker({ color: "#3b82f6", draggable: false })
         .setLngLat([drop.lng, drop.lat])
         .addTo(mapRef.current);
       markersRef.current.set("drop", marker);
     }
   }, [drop, olaMapsInstance, mapReady]);
 
-  // Route drawing
+  // Nearest driver marker — AMBER
+  useEffect(() => {
+    if (!olaMapsInstance || !mapReady || !mapRef.current) return;
+
+    const existing = markersRef.current.get("nearest-driver");
+    if (!nearestDriver) {
+      if (existing) { existing.remove(); markersRef.current.delete("nearest-driver"); }
+      return;
+    }
+    if (existing) {
+      existing.setLngLat([nearestDriver.lng, nearestDriver.lat]);
+    } else {
+      const marker = olaMapsInstance
+        .addMarker({ color: "#f59e0b", draggable: false })
+        .setLngLat([nearestDriver.lng, nearestDriver.lat])
+        .addTo(mapRef.current);
+      markersRef.current.set("nearest-driver", marker);
+    }
+  }, [nearestDriver, olaMapsInstance, mapReady]);
+
+  // Pickup → Drop route (blue)
   useEffect(() => {
     if (!mapReady || !mapRef.current) return;
 
     if (pickup && drop) {
-      fetchAndDrawRoute(pickup, drop);
+      fetchAndDrawRoute(pickup, drop, "route", "#2563eb", "#1e40af");
+      fitBoundsToPoints(pickup, drop);
     } else {
-      clearRoute();
+      clearRouteLayer("route");
     }
   }, [pickup, drop, mapReady]);
 
+  // Nearest driver → Pickup route (amber, dashed feel via opacity)
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+
+    if (nearestDriver && pickup) {
+      fetchAndDrawRoute(
+        { lat: nearestDriver.lat, lng: nearestDriver.lng },
+        pickup,
+        "driver-route",
+        "#f59e0b",
+        "#d97706"
+      );
+    } else {
+      clearRouteLayer("driver-route");
+    }
+  }, [nearestDriver, pickup, mapReady]);
+
   const fetchAndDrawRoute = async (
-    pickupCoord: { lat: number; lng: number },
-    dropCoord: { lat: number; lng: number }
+    from: { lat: number; lng: number },
+    to: { lat: number; lng: number },
+    layerId: string,
+    lineColor: string,
+    outlineColor: string
   ) => {
     try {
-      const url = `https://api.olamaps.io/routing/v1/directions?origin=${pickupCoord.lat},${pickupCoord.lng}&destination=${dropCoord.lat},${dropCoord.lng}&api_key=${OLA_API_KEY}`;
-      
+      const url = `https://api.olamaps.io/routing/v1/directions?origin=${from.lat},${from.lng}&destination=${to.lat},${to.lng}&api_key=${OLA_API_KEY}`;
+
       const response = await fetch(url, {
         method: "POST",
         headers: { "X-Request-Id": crypto.randomUUID() },
       });
 
-      if (!response.ok) {
-        console.error("Directions API error:", response.status);
-        return;
-      }
+      if (!response.ok) return;
 
       const data = await response.json();
 
       if (data.routes && data.routes.length > 0) {
         const route = data.routes[0];
         const geometry = route.overview_polyline || route.legs?.[0]?.polyline;
-        
+
         if (geometry) {
           const coords = decodePolyline(geometry);
-          drawRoute(coords);
-          fitBoundsToRoute(coords);
+          drawRouteLayer(coords, layerId, lineColor, outlineColor);
         }
       }
     } catch (error) {
-      console.error("Failed to fetch route:", error);
+      console.error(`Failed to fetch route (${layerId}):`, error);
     }
   };
 
-  // Google-style polyline decoder
   const decodePolyline = (encoded: string): [number, number][] => {
     const points: [number, number][] = [];
     let index = 0;
@@ -239,62 +274,63 @@ const MapContainer: React.FC<MapContainerProps> = ({
       const dlng = (result & 1) ? ~(result >> 1) : (result >> 1);
       lng += dlng;
 
-      points.push([lng / 1e5, lat / 1e5]); // [lng, lat] for maplibre/mapbox
+      points.push([lng / 1e5, lat / 1e5]);
     }
 
     return points;
   };
 
-  const drawRoute = (coordinates: [number, number][]) => {
+  const drawRouteLayer = (
+    coordinates: [number, number][],
+    layerId: string,
+    lineColor: string,
+    outlineColor: string
+  ) => {
     if (!mapRef.current || coordinates.length === 0) return;
 
-    clearRoute();
+    clearRouteLayer(layerId);
 
     try {
-      mapRef.current.addSource("route", {
+      mapRef.current.addSource(layerId, {
         type: "geojson",
         data: {
           type: "Feature",
           properties: {},
-          geometry: {
-            type: "LineString",
-            coordinates,
-          },
+          geometry: { type: "LineString", coordinates },
         },
       });
 
       mapRef.current.addLayer({
-        id: "route-outline",
+        id: `${layerId}-outline`,
         type: "line",
-        source: "route",
+        source: layerId,
         layout: { "line-join": "round", "line-cap": "round" },
-        paint: { "line-color": "#1e40af", "line-width": 7, "line-opacity": 0.4 },
+        paint: { "line-color": outlineColor, "line-width": 7, "line-opacity": 0.4 },
       });
 
       mapRef.current.addLayer({
-        id: "route",
+        id: layerId,
         type: "line",
-        source: "route",
+        source: layerId,
         layout: { "line-join": "round", "line-cap": "round" },
-        paint: { "line-color": "#2563eb", "line-width": 4, "line-opacity": 0.9 },
+        paint: { "line-color": lineColor, "line-width": 4, "line-opacity": 0.9 },
       });
-
-      routeLayerRef.current = true;
     } catch (e) {
-      console.error("Failed to draw route:", e);
+      console.error(`Failed to draw route layer (${layerId}):`, e);
     }
   };
 
-  const fitBoundsToRoute = (coordinates: [number, number][]) => {
-    if (!mapRef.current || coordinates.length === 0) return;
+  // Fit map so pickup (west/left) and drop (east/right) are both visible
+  const fitBoundsToPoints = (
+    pickupCoord: { lat: number; lng: number },
+    dropCoord: { lat: number; lng: number }
+  ) => {
+    if (!mapRef.current) return;
 
-    let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
-    for (const [lng, lat] of coordinates) {
-      if (lng < minLng) minLng = lng;
-      if (lng > maxLng) maxLng = lng;
-      if (lat < minLat) minLat = lat;
-      if (lat > maxLat) maxLat = lat;
-    }
+    const minLng = Math.min(pickupCoord.lng, dropCoord.lng);
+    const maxLng = Math.max(pickupCoord.lng, dropCoord.lng);
+    const minLat = Math.min(pickupCoord.lat, dropCoord.lat);
+    const maxLat = Math.max(pickupCoord.lat, dropCoord.lat);
 
     mapRef.current.fitBounds(
       [[minLng, minLat], [maxLng, maxLat]],
@@ -302,19 +338,18 @@ const MapContainer: React.FC<MapContainerProps> = ({
     );
   };
 
-  const clearRoute = () => {
+  const clearRouteLayer = (layerId: string) => {
     if (!mapRef.current) return;
     try {
-      if (mapRef.current.getLayer("route")) mapRef.current.removeLayer("route");
-      if (mapRef.current.getLayer("route-outline")) mapRef.current.removeLayer("route-outline");
-      if (mapRef.current.getSource("route")) mapRef.current.removeSource("route");
+      if (mapRef.current.getLayer(layerId)) mapRef.current.removeLayer(layerId);
+      if (mapRef.current.getLayer(`${layerId}-outline`)) mapRef.current.removeLayer(`${layerId}-outline`);
+      if (mapRef.current.getSource(layerId)) mapRef.current.removeSource(layerId);
     } catch (e) {
       // ignore
     }
-    routeLayerRef.current = false;
   };
 
-  // Driver markers
+  // Driver markers (when showDrivers=true, poll API)
   useEffect(() => {
     if (!showDrivers || !mapReady || !mapRef.current) return;
 
@@ -322,7 +357,7 @@ const MapContainer: React.FC<MapContainerProps> = ({
       const center = userLocation || pickup || { lat: 27.5692, lng: 77.6843 };
       try {
         const response = await fetch(
-          `${API_BASE}/api/drivers/nearby?lat=${center.lat}&lng=${center.lng}&radius=5`
+          `${API_BASE}/api/drivers/nearby/?lat=${center.lat}&lng=${center.lng}&radius=5`
         );
         if (response.ok) {
           const data = await response.json();
