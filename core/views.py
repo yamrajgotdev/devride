@@ -7,16 +7,38 @@ from .models import Ride, Driver, Customer, RideLocation
 from .utils import distance, generate_otp, calculate_fare
 
 
+MIME_TYPES = {
+    '.js': 'application/javascript',
+    '.mjs': 'application/javascript',
+    '.css': 'text/css',
+    '.html': 'text/html',
+    '.json': 'application/json',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.svg': 'image/svg+xml',
+    '.ico': 'image/x-icon',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+    '.ttf': 'font/ttf',
+}
+
+
+def _mime(path):
+    ext = os.path.splitext(path)[1].lower()
+    return MIME_TYPES.get(ext, 'application/octet-stream')
+
+
 def frontend_index(request):
     index_path = os.path.join(settings.BASE_DIR, 'static', 'frontend', 'dist', 'index.html')
-    return FileResponse(open(index_path, 'rb'))
+    return FileResponse(open(index_path, 'rb'), content_type='text/html')
 
 
 def serve_static_assets(request, path):
     from django.http import Http404
     asset_path = os.path.join(settings.BASE_DIR, 'static', 'frontend', 'dist', 'assets', path)
     if os.path.exists(asset_path):
-        return FileResponse(open(asset_path, 'rb'))
+        return FileResponse(open(asset_path, 'rb'), content_type=_mime(asset_path))
     raise Http404("Asset not found")
 
 
@@ -24,7 +46,7 @@ def serve_dist_file(request, filename):
     from django.http import Http404
     file_path = os.path.join(settings.BASE_DIR, 'static', 'frontend', 'dist', filename)
     if os.path.exists(file_path):
-        return FileResponse(open(file_path, 'rb'))
+        return FileResponse(open(file_path, 'rb'), content_type=_mime(file_path))
     raise Http404("File not found")
 
 
