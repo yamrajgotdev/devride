@@ -144,21 +144,26 @@ def calculate_distance_api(request):
     drop_lat, drop_lng = float(drop_lat), float(drop_lng)
 
     route_data = get_route(pickup_lat, pickup_lng, drop_lat, drop_lng)
-    
+
     if route_data and route_data.get('distance_km'):
         dist = route_data['distance_km']
         route_coords = route_data.get('geometry', [])
         duration = route_data.get('duration_minutes', int(dist * 3))
+        if isinstance(duration, float):
+            duration = int(duration)
     else:
-        dist = distance(pickup_lat, pickup_lng, drop_lat, drop_lng)
+        # Haversine is straight-line; multiply by 1.35 road-factor for realistic distance
+        straight_line = distance(pickup_lat, pickup_lng, drop_lat, drop_lng)
+        dist = round(straight_line * 1.35, 2)
         route_coords = generate_route_points(pickup_lat, pickup_lng, drop_lat, drop_lng)
-        duration = int(dist * 3)
-    
+        # avg speed ~25 km/h in local areas
+        duration = max(1, int((dist / 25) * 60))
+
     fare = calculate_fare(dist, vehicle_type)
 
     return Response({
         'distance_km': round(dist, 2),
-        'estimated_fare': fare,
+        'estimated_fare': round(fare, 2),
         'vehicle_type': vehicle_type,
         'route': route_coords,
         'duration_minutes': duration
@@ -277,6 +282,55 @@ def complete_ride_api(request, ride_id):
         })
     except Ride.DoesNotExist:
         return Response({'status': 'error', 'message': 'Ride not found'}, status=404)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def nearby_drivers_api(request):
+    try:
+        lat = float(request.GET.get('lat', 0))
+        lng = float(request.GET.get('lng', 0))
+        radius_km = float(request.GET.get('radius', 5))
+        vehicle_type = request.GET.get('vehicle_type')
+
+        if not lat or not lng:
+            return Response({'status': 'error', 'message': 'lat and lng required'}, status=400)
+
+        drivers = Driver.objects.filter(is_online=True, is_verified=True)
+        if vehicle_type:
+            drivers = drivers.filter(vehicle_type=vehicle_type)
+
+        nearby = []
+        for driver in drivers:
+            if driver.current_lat and driver.current_lng:
+                dist = distance(lat, lng, driver.current_lat, driver.current_lng)
+                if dist <= radius_km:
+                    nearby.append({
+                        'id': driver.id,
+                        'name': driver.name,
+                        'lat': driver.current_lat,
+                        'lng': driver.current_lng,
+                        'vehicle_type': driver.vehicle_type,
+                        'distance': round(dist, 2),
+                    })
+
+        nearby.sort(key=lambda x: x['distance'])
+        return Response({'drivers': nearby, 'count': len(nearby)})
+    except Exception as e:
+        return Response({'status': 'error', 'message': str(e)}, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def pricing_api(request):
+    base_fare = {'bike': 15, 'porter': 25}
+    per_km_rate = {'bike': 8, 'porter': 14}
+    return Response({
+        'pricing': [
+            {'vehicle_type': 'bike', 'base_fare': base_fare['bike'], 'per_km': per_km_rate['bike']},
+            {'vehicle_type': 'porter', 'base_fare': base_fare['porter'], 'per_km': per_km_rate['porter']},
+        ]
+    })
 
 
 @api_view(['GET'])
