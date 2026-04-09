@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "olamaps-web-sdk": "^1.4.0"
+  }
+}
