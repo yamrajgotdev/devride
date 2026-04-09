@@ -9,7 +9,7 @@ import { useLanguage } from "@/components/LanguageSelector";
 import ContactButton from "@/components/ContactButton";
 import MapContainer from "@/components/map/MapContainer";
 
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const API_BASE = import.meta.env.VITE_API_URL || "";
 
 interface Prediction {
   description: string;
@@ -51,6 +51,7 @@ const Customer = () => {
   const [dropSuggestions, setDropSuggestions] = useState<Prediction[]>([]);
   const [showPickupSuggestions, setShowPickupSuggestions] = useState(false);
   const [showDropSuggestions, setShowDropSuggestions] = useState(false);
+  const [nearestDriver, setNearestDriver] = useState<{ id: number; lat: number; lng: number; name?: string; distance?: number } | null>(null);
 
   const pickupRef = useRef<HTMLDivElement>(null);
   const dropRef = useRef<HTMLDivElement>(null);
@@ -154,22 +155,41 @@ const Customer = () => {
     );
   };
 
+  const fetchNearestDriver = async (lat: number, lng: number) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/drivers/nearby/?lat=${lat}&lng=${lng}&radius=10`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const driversList = data.drivers || [];
+      if (driversList.length > 0) {
+        setNearestDriver(driversList[0]);
+      } else {
+        setNearestDriver(null);
+      }
+    } catch {
+      setNearestDriver(null);
+    }
+  };
+
   const calculateFare = async () => {
     if (!pickupCoords || !dropCoords) return;
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/distance/calculate/`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          pickup_lat: pickupCoords.lat,
-          pickup_lng: pickupCoords.lng,
-          drop_lat: dropCoords.lat,
-          drop_lng: dropCoords.lng,
-          vehicle_type: selectedVehicle,
+      const [fareRes] = await Promise.all([
+        fetch(`${API_BASE}/api/distance/calculate/`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pickup_lat: pickupCoords.lat,
+            pickup_lng: pickupCoords.lng,
+            drop_lat: dropCoords.lat,
+            drop_lng: dropCoords.lng,
+            vehicle_type: selectedVehicle,
+          }),
         }),
-      });
-      const data = await res.json();
+        fetchNearestDriver(pickupCoords.lat, pickupCoords.lng),
+      ]);
+      const data = await fareRes.json();
       if (data.distance_km) {
         setDistance(data.distance_km);
         setEstimatedFare(data.estimated_fare);
@@ -253,6 +273,9 @@ const Customer = () => {
             drop={dropCoords}
             userLocation={pickupCoords}
             showDrivers={false}
+            pickupName={pickup}
+            dropName={drop}
+            nearestDriver={nearestDriver}
           />
         </div>
 
